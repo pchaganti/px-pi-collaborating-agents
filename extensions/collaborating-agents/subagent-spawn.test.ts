@@ -18,6 +18,7 @@ const ORIGINAL_TEST_CMUX_ARGS_FILE = process.env.TEST_CMUX_ARGS_FILE;
 const ORIGINAL_TEST_CMUX_SEND_ASYNC = process.env.TEST_CMUX_SEND_ASYNC;
 const ORIGINAL_TEST_CMUX_SEND_TRUNCATE_AT = process.env.TEST_CMUX_SEND_TRUNCATE_AT;
 const ORIGINAL_TEST_PI_EXIT_DELAY_MS = process.env.TEST_PI_EXIT_DELAY_MS;
+const ORIGINAL_TEST_PI_SESSION_CREATE_DELAY_MS = process.env.TEST_PI_SESSION_CREATE_DELAY_MS;
 const ORIGINAL_TEST_CMUX_CLOSE_FAIL = process.env.TEST_CMUX_CLOSE_FAIL;
 const ORIGINAL_TEST_PI_EXIT_CODE = process.env.TEST_PI_EXIT_CODE;
 const ORIGINAL_TEST_PI_MULTI_TURN = process.env.TEST_PI_MULTI_TURN;
@@ -115,19 +116,75 @@ if (args.includes("--mode") && args.includes("json")) {
 }
 
 if (sessionPath) {
-  fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
-  fs.writeFileSync(sessionPath, JSON.stringify({ type: "session", id: "fake-session" }) + "\\n", "utf-8");
-  const initialSessionMtime = fs.statSync(sessionPath).mtime;
+  const writeSession = () => {
+    fs.mkdirSync(path.dirname(sessionPath), { recursive: true });
+    fs.writeFileSync(sessionPath, JSON.stringify({ type: "session", id: "fake-session" }) + "\\n", "utf-8");
+    const initialSessionMtime = fs.statSync(sessionPath).mtime;
 
-  const appendSessionLine = (payload, preserveInitialMtime = false) => {
-    fs.appendFileSync(sessionPath, JSON.stringify(payload) + "\\n", "utf-8");
-    if (preserveInitialMtime) {
-      fs.utimesSync(sessionPath, initialSessionMtime, initialSessionMtime);
-    }
-  };
+    const appendSessionLine = (payload, preserveInitialMtime = false) => {
+      fs.appendFileSync(sessionPath, JSON.stringify(payload) + "\\n", "utf-8");
+      if (preserveInitialMtime) {
+        fs.utimesSync(sessionPath, initialSessionMtime, initialSessionMtime);
+      }
+    };
 
-  if (process.env.TEST_PI_SAME_MTIME_FINAL_ONLY === "1") {
-    setTimeout(() => {
+    if (process.env.TEST_PI_SAME_MTIME_FINAL_ONLY === "1") {
+      setTimeout(() => {
+        appendSessionLine({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "fake-ok" }],
+            stopReason: "stop",
+          },
+        }, true);
+      }, 120);
+    } else if (process.env.TEST_PI_MULTI_TURN === "1") {
+      setTimeout(() => {
+        appendSessionLine({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "fake-intermediate" }],
+            stopReason: "stop",
+          },
+        });
+      }, 20);
+
+      setTimeout(() => {
+        appendSessionLine({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } }],
+            stopReason: "toolUse",
+          },
+        });
+      }, 220);
+
+      setTimeout(() => {
+        appendSessionLine({
+          type: "message",
+          message: {
+            role: "toolResult",
+            toolCallId: "tool-1",
+            toolName: "read",
+            content: [{ type: "text", text: "ok" }],
+          },
+        });
+      }, 420);
+
+      setTimeout(() => {
+        appendSessionLine({
+          type: "message",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "fake-final" }],
+            stopReason: "stop",
+          },
+        });
+      }, 620);
+    } else {
       appendSessionLine({
         type: "message",
         message: {
@@ -135,62 +192,15 @@ if (sessionPath) {
           content: [{ type: "text", text: "fake-ok" }],
           stopReason: "stop",
         },
-      }, true);
-    }, 120);
-  } else if (process.env.TEST_PI_MULTI_TURN === "1") {
-    setTimeout(() => {
-      appendSessionLine({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "fake-intermediate" }],
-          stopReason: "stop",
-        },
       });
-    }, 20);
+    }
+  };
 
-    setTimeout(() => {
-      appendSessionLine({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: { path: "README.md" } }],
-          stopReason: "toolUse",
-        },
-      });
-    }, 220);
-
-    setTimeout(() => {
-      appendSessionLine({
-        type: "message",
-        message: {
-          role: "toolResult",
-          toolCallId: "tool-1",
-          toolName: "read",
-          content: [{ type: "text", text: "ok" }],
-        },
-      });
-    }, 420);
-
-    setTimeout(() => {
-      appendSessionLine({
-        type: "message",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "fake-final" }],
-          stopReason: "stop",
-        },
-      });
-    }, 620);
+  const sessionCreateDelayMs = Number(process.env.TEST_PI_SESSION_CREATE_DELAY_MS || "0");
+  if (Number.isFinite(sessionCreateDelayMs) && sessionCreateDelayMs > 0) {
+    setTimeout(writeSession, sessionCreateDelayMs);
   } else {
-    appendSessionLine({
-      type: "message",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "fake-ok" }],
-        stopReason: "stop",
-      },
-    });
+    writeSession();
   }
 }
 
@@ -537,6 +547,12 @@ afterEach(() => {
     process.env.TEST_PI_EXIT_DELAY_MS = ORIGINAL_TEST_PI_EXIT_DELAY_MS;
   } else {
     delete process.env.TEST_PI_EXIT_DELAY_MS;
+  }
+
+  if (typeof ORIGINAL_TEST_PI_SESSION_CREATE_DELAY_MS === "string") {
+    process.env.TEST_PI_SESSION_CREATE_DELAY_MS = ORIGINAL_TEST_PI_SESSION_CREATE_DELAY_MS;
+  } else {
+    delete process.env.TEST_PI_SESSION_CREATE_DELAY_MS;
   }
 
   if (typeof ORIGINAL_TEST_CMUX_CLOSE_FAIL === "string") {
@@ -953,6 +969,49 @@ describe("subagent spawn", () => {
     const closeArgs = capturedCmuxArgs[10]!;
     expect(closeArgs).toEqual(["close-surface", "--surface", "surface:99"]);
   });
+
+  test("does not fail a cmux-pane subagent whose session file appears after the startup grace", async () => {
+    const tempDir = makeTempDir("collab-subagent-cmux-pane-delayed-session");
+    const { argsFile } = writeFakePiBinary(tempDir);
+    const { argsFile: cmuxArgsFile } = writeFakeCmuxBinary(tempDir);
+
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.TEST_ARGS_FILE = argsFile;
+    process.env.TEST_CMUX_ARGS_FILE = cmuxArgsFile;
+    process.env.TEST_CMUX_SEND_ASYNC = "1";
+    process.env.TEST_PI_SESSION_CREATE_DELAY_MS = "10500";
+    process.env.TEST_PI_EXIT_DELAY_MS = "11000";
+
+    const agentDef: SpawnAgentDefinition = {
+      name: "worker",
+      description: "Worker",
+      systemPrompt: "Return concise findings.",
+      source: "bundled",
+      filePath: "/tmp/worker.toml",
+      tools: ["read", "bash"],
+    };
+
+    const result = await runSpawnTask(
+      tempDir,
+      {
+        agent: "worker",
+        task: "Inspect the repository",
+      },
+      agentDef,
+      {
+        index: 0,
+        runId: "testrun4-delayed-session",
+        recursionDepth: 0,
+        launchMode: "cmux-pane",
+        cmuxResultTimeoutMs: 15000,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe("fake-ok");
+    expect(result.sessionId).toBe("fake-session");
+    expect(result.cmuxPaneClosed).toBe(true);
+  }, 20000);
 
   test("notifies cmux session metadata with the explicit session file", async () => {
     const tempDir = makeTempDir("collab-subagent-cmux-session-metadata");

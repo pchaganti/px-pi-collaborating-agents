@@ -752,27 +752,44 @@ function createPiEventProcessor(
   return { processLine, finalize };
 }
 
-async function waitForFile(pathToWatch: string): Promise<void> {
-  while (true) {
+async function waitForSessionFileOrExitMarker(args: {
+  sessionFile: string;
+  exitMarkerPath: string;
+  timeoutMs: number;
+}): Promise<{ fileExists: boolean; exitCode: number | null; timedOut: boolean }> {
+  const timeoutMs = Math.max(100, Math.floor(args.timeoutMs));
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
     try {
-      await fs.promises.access(pathToWatch, fs.constants.F_OK);
-      return;
+      await fs.promises.access(args.sessionFile, fs.constants.F_OK);
+      return {
+        fileExists: true,
+        exitCode: readExitMarkerCode(args.exitMarkerPath),
+        timedOut: false,
+      };
     } catch {
+      const exitCode = readExitMarkerCode(args.exitMarkerPath);
+      if (exitCode !== null) {
+        return { fileExists: false, exitCode, timedOut: false };
+      }
       await sleep(100);
     }
   }
-}
 
-async function waitForFileWithTimeout(pathToWatch: string, timeoutMs: number): Promise<boolean> {
-  const startedAt = Date.now();
-  while (true) {
-    try {
-      await fs.promises.access(pathToWatch, fs.constants.F_OK);
-      return true;
-    } catch {
-      if (Date.now() - startedAt >= timeoutMs) return false;
-      await sleep(100);
-    }
+  try {
+    await fs.promises.access(args.sessionFile, fs.constants.F_OK);
+    return {
+      fileExists: true,
+      exitCode: readExitMarkerCode(args.exitMarkerPath),
+      timedOut: false,
+    };
+  } catch {
+    return {
+      fileExists: false,
+      exitCode: readExitMarkerCode(args.exitMarkerPath),
+      timedOut: true,
+    };
   }
 }
 
@@ -1624,9 +1641,13 @@ export async function runSpawnTask(
       });
     }
 
-    const didCreateSession = await waitForFileWithTimeout(result.sessionFile!, 10000);
-    if (!didCreateSession) {
-      result.exitCode = 1;
+    const sessionFileWait = await waitForSessionFileOrExitMarker({
+      sessionFile: result.sessionFile!,
+      exitMarkerPath: exitMarkerPath!,
+      timeoutMs: cmuxResultTimeoutMs,
+    });
+    if (!sessionFileWait.fileExists) {
+      result.exitCode = sessionFileWait.exitCode ?? 1;
       const paneScreen = await runCmuxCommand([
         "read-screen",
         "--workspace",
@@ -1637,7 +1658,10 @@ export async function runSpawnTask(
         "--lines",
         "120",
       ]);
-      result.error = paneScreen.stdout || "Timed out waiting for subagent session file in cmux pane";
+      const defaultError = sessionFileWait.exitCode !== null
+        ? `cmux-pane subagent exited with code ${sessionFileWait.exitCode} before creating its session file`
+        : "Timed out waiting for subagent session file in cmux pane";
+      result.error = paneScreen.stdout || defaultError;
       result.output = result.error;
       return result;
     }
