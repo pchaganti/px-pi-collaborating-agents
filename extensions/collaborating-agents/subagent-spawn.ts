@@ -69,8 +69,6 @@ type SpawnSessionMetadataCallback = (metadata: SpawnSessionMetadata) => void | P
 
 export const DEFAULT_SUBAGENT_TOOLS = ["read", "write", "edit", "bash", "agent_message"];
 
-const SUPPORTED_SUBAGENT_TOOL_NAMES = new Set(["read", "bash", "edit", "write", "grep", "find", "ls"]);
-
 const LOCAL_COLLABORATING_AGENTS_EXTENSION = path.join(path.dirname(fileURLToPath(import.meta.url)), "index.ts");
 const HOME_COLLABORATING_AGENTS_EXTENSION = path.join(os.homedir(), ".pi", "agent", "extensions", "collaborating-agents", "index.ts");
 const CMUX_PANE_IDLE_GRACE_MS = 1200;
@@ -1556,16 +1554,15 @@ export async function runSpawnTask(
   const model = agentDef.model;
   if (model) commonArgs.push("--models", model);
 
-  const requestedTools = agentDef.tools ?? [];
-  const supportedTools = requestedTools.filter((tool) => SUPPORTED_SUBAGENT_TOOL_NAMES.has(tool));
+  const requestedTools = [...new Set((agentDef.tools ?? []).map((tool) => tool.trim()).filter(Boolean))];
 
-  if (supportedTools.length > 0) {
-    commonArgs.push("--tools", supportedTools.join(","));
+  if (requestedTools.length > 0) {
+    commonArgs.push("--tools", requestedTools.join(","));
   }
 
   // Ensure the collaborating-agents extension is always loaded in subagents so
-  // `agent_message` and `subagent` tools are available, even if auto-discovery
-  // is not functioning in the spawned environment.
+  // requested extension tools such as `agent_message` can be registered and
+  // activated by the --tools allow-list, even if auto-discovery is unavailable.
   const extensionPaths = [
     LOCAL_COLLABORATING_AGENTS_EXTENSION,
     HOME_COLLABORATING_AGENTS_EXTENSION,
@@ -1643,7 +1640,7 @@ export async function runSpawnTask(
     },
     launchDelayMs,
     resolvedModel: model,
-    resolvedTools: agentDef.tools ? [...agentDef.tools] : undefined,
+    resolvedTools: requestedTools.length > 0 ? [...requestedTools] : undefined,
     coordinator: options.parentAgentName,
   };
   const sessionMetadata = createSessionMetadataNotifier(result, options.onSessionMetadata);

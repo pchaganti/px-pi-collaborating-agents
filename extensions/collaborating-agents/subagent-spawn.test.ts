@@ -773,6 +773,44 @@ describe("subagent spawn", () => {
     expect(result.launchSystemPromptLength).toBe(typePrompt.length);
   });
 
+  test("preserves requested extension tools in the child --tools allow-list", async () => {
+    const tempDir = makeTempDir("collab-subagent-extension-tools");
+    const { argsFile } = writeFakePiBinary(tempDir);
+
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.TEST_ARGS_FILE = argsFile;
+
+    const agentDef: SpawnAgentDefinition = {
+      name: "worker",
+      description: "Worker",
+      systemPrompt: "Use coordination tools when needed.",
+      source: "bundled",
+      filePath: "/tmp/worker.toml",
+      tools: ["read", "agent_message", "custom_project_tool", "read"],
+    };
+
+    const result = await runSpawnTask(
+      tempDir,
+      {
+        agent: "worker",
+        task: "Coordinate with the parent",
+      },
+      agentDef,
+      {
+        index: 0,
+        runId: "testrun-extension-tools",
+        recursionDepth: 0,
+        enableSessionControl: false,
+      },
+    );
+
+    const capturedArgs = JSON.parse(fs.readFileSync(argsFile, "utf-8")) as string[];
+    const toolsFlagIndex = capturedArgs.indexOf("--tools");
+    expect(toolsFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(capturedArgs[toolsFlagIndex + 1]).toBe("read,agent_message,custom_project_tool");
+    expect(result.resolvedTools).toEqual(["read", "agent_message", "custom_project_tool"]);
+  });
+
   test("notifies process-mode session metadata when json session events are observed", async () => {
     const tempDir = makeTempDir("collab-subagent-process-session-metadata");
     const { argsFile } = writeFakePiBinary(tempDir);
@@ -1099,7 +1137,9 @@ describe("subagent spawn", () => {
 
     const capturedArgs = JSON.parse(fs.readFileSync(argsFile, "utf-8")) as string[];
     expect(capturedArgs.includes("--append-system-prompt")).toBe(false);
-    expect(capturedArgs.includes("--tools")).toBe(false);
+    const toolsFlagIndex = capturedArgs.indexOf("--tools");
+    expect(toolsFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(capturedArgs[toolsFlagIndex + 1]).toBe("agent_message");
 
     const expectedPrompt = "Parent agent: RapidRiver\n\nWrite docs";
     expect(capturedArgs[capturedArgs.length - 1]).toBe(expectedPrompt);
